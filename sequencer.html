@@ -38,7 +38,7 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             height: 100vh;
             display: flex;
-            flex-direction: column; /* Changed to column for title bar */
+            flex-direction: column; 
             overflow: hidden;
             font-size: 12px;
         }
@@ -129,15 +129,15 @@
             border-radius: 4px;
             padding: 12px;
             color: white;
-            pointer-events: none; /* Let clicks pass through */
+            pointer-events: none; 
             backdrop-filter: blur(4px);
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            transition: opacity 0.5s ease-in-out; /* Slower fade */
-            opacity: 0; /* Hidden by default */
+            transition: opacity 0.5s ease-in-out; 
+            opacity: 0; 
             z-index: 20;
         }
 
-        #event-hud.active { opacity: 1; transition: opacity 0.1s; } /* Fast appear */
+        #event-hud.active { opacity: 1; transition: opacity 0.1s; } 
 
         #event-hud h4 { margin: 0 0 5px 0; color: var(--c-accent); text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }
         #event-hud .hud-name { font-size: 16px; font-weight: bold; margin-bottom: 4px; text-shadow: 0 0 5px rgba(213, 0, 249, 0.4); }
@@ -287,7 +287,8 @@
 <body>
 
     <div id="title-bar">
-        <!-- Title Text will be populated by JS -->
+        <span id="title-text"></span>
+        <button id="btn-toggle-legacy" style="margin-left: auto; margin-top: 0; width: auto; padding: 4px 8px; font-size: 10px; background: #333; box-shadow: none; border: 1px solid var(--c-border);">Switch Mode</button>
     </div>
 
     <div id="editor-layout">
@@ -295,10 +296,21 @@
             <!-- TOP: Edit Menu -->
             <div id="edit-panel">
                 <h3>Edit Event</h3>
-                <div class="control-group">
+                <div class="control-group" id="grp-event-type">
                     <label>Event Type</label>
                     <select id="event-type-select"></select>
                 </div>
+                
+                <!-- Legacy Mode Inputs -->
+                <div class="control-group hidden" id="grp-legacy-label">
+                    <label>Label</label>
+                    <input type="text" id="prop-legacy-label" value="Event">
+                </div>
+                <div class="control-group hidden" id="grp-legacy-value">
+                    <label>Value (Optional)</label>
+                    <input type="text" id="prop-legacy-value" value="">
+                </div>
+                
                 <div id="dynamic-controls"></div>
                 
                 <hr style="border-color: var(--c-border); margin: 20px 0;">
@@ -371,10 +383,29 @@
                     <input type="number" id="set-quant" value="4" step="1" min="1">
                 </div>
 
+                <!-- Duration Unit Toggle -->
+                <div class="control-group">
+                    <label>Duration Unit</label>
+                    <select id="set-dur-unit">
+                        <option value="time">Time (Seconds)</option>
+                        <option value="beats">Beats</option>
+                        <option value="steps">Steps</option>
+                    </select>
+                </div>
+
                 <!-- Actions -->
                 <button id="btn-export" class="embed-hidden">Export JSON</button>
                 <button id="btn-import" class="embed-hidden">Import JSON</button>
                 <input type="file" id="file-import" accept=".json" style="display:none;">
+                
+                <!-- Legacy Export Actions -->
+                <button id="btn-export-time" class="embed-hidden hidden legacy-only">Download TimeList.txt</button>
+                <button id="btn-export-label" class="embed-hidden hidden legacy-only">Download LabelList.txt</button>
+                <button id="btn-export-value" class="embed-hidden hidden legacy-only">Download ValueList.txt</button>
+                
+                <!-- External Modding Button -->
+                <button id="btn-load-custom" class="secondary hidden">Load Custom Events</button>
+                <input type="file" id="file-custom-events" accept=".json" style="display:none;">
 
                 <button id="btn-save" class="embed-only hidden">Save</button>
                 <button id="btn-exit" class="embed-only hidden btn-danger">Exit without saving</button>
@@ -426,7 +457,7 @@
 /**
  * VERSION CONTROL
  */
-var ce_version = "v0.0.0";
+var ce_version = "v0.0.4pre";
 
 /**
  * DATA & CONFIGURATION
@@ -439,6 +470,8 @@ const EFFECTS = ['color', 'fisheye', 'whirl', 'pixelate', 'mosaic', 'brightness'
 const urlParams = new URLSearchParams(window.location.search);
 const isEmbed = urlParams.get('embed') === 'true';
 const isDebug = urlParams.get('debug') === 'true';
+const isExternal = urlParams.get('external') === 'true';
+const isLegacy = urlParams.get('legacy') === '1' || urlParams.get('legacy') === 'true';
 
 // Import Button Logic
 const importBtn = document.getElementById('btn-import');
@@ -463,11 +496,11 @@ fileImportInput.addEventListener('change', (e) => {
     reader.readAsText(file);
 });
 
-// Definition of all events based on prompt
+// Definition of all events
 const EVENT_DEFS = {
     // ==ANIMATION==
     "Switch costume": { costume: "string", comment: "Switches the costume. Self-explanatory isn't it?" },
-    "Play Animation": { animation: "string", fps: "number", start: "string", looped: "boolean", _defaults: { fps: 24 }, comment: "Iterates through each frame from the provided costume folder, starting over once completed." },
+    "Play Animation": { animation: "string", fps: "number", start: "int", looped: "boolean", _defaults: { fps: 24, start: 0 }, comment: "Iterates through each frame from the provided costume folder, starting over once completed." },
     "Stop Animation": { comment: "Stops the current animation" },
 
     // ==EFFECTS==
@@ -495,6 +528,7 @@ const EVENT_DEFS = {
     
     "Set Size": { size: "number", _defaults: { size: 70 }, comment: "Sets the size of the object." },
     "Change Size": { size: "number", comment: "Changes the object's size." },
+    "Reset Size": { comment: "Resets the object's size." },
     
     "Set Stretch": { x: "number", y: "number", _defaults: { x: 100, y: 100 }, comment: "Sets the stretch of the object." },
     "Change Stretch": { x: "number", y: "number", comment: "Changes the stretch of the object." },
@@ -510,7 +544,7 @@ const EVENT_DEFS = {
 
     // ==TWEENING==
     "Tween Position": { x: "number", y: "number", duration: "number", tweenMode: "tweenMode", _defaults: { duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the object to a position." },
-    "Cancel Tween Position": { x: "number", y: "number", comment: "Cancels the \"Tween Position\" Event" }, 
+    "Cancel Tween Position": { comment: "Cancels the \"Tween Position\" Event" }, 
     
     "Tween X Position": { x: "number", duration: "number", tweenMode: "tweenMode", _defaults: { duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the X position of the object." },
     "Cancel Tween X Position": { comment: "Cancels the \"Tween X Position\" Event" },
@@ -522,14 +556,14 @@ const EVENT_DEFS = {
     "Cancel Tween Direction": { comment: "Cancels the \"Tween Direction\" Event" },
     
     "Tween Size": { size: "number", duration: "number", tweenMode: "tweenMode", _defaults: { size: 70, duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the size of the object." },
-    "Cancel Tween Size": { size: "number", comment: "Cancels the \"Tween Size\" Event" }, 
+    "Cancel Tween Size": { comment: "Cancels the \"Tween Size\" Event" }, 
     
     "Tween Stretch": { x: "number", y: "number", duration: "number", tweenMode: "tweenMode", _defaults: { x: 100, y: 100, duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the X-axis of the stretch." },
     "Tween X Stretch": { x: "number", duration: "number", tweenMode: "tweenMode", _defaults: { x: 100, duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the X-axis of the stretch." },
     "Tween Y Stretch": { y: "number", duration: "number", tweenMode: "tweenMode", _defaults: { y: 100, duration: 1, tweenMode: "linear-in out" }, comment: "Tweens the Y-axis of the stretch." },
     "Cancel Tween Stretch": { comment: "Cancels the \"Tween Stretch\" Event" },
-    "Cancel Tween X Stretch": { x: "number", comment: "Cancels the \"Cancel Tween Stretch X\" Event" },
-    "Cancel Tween Y Stretch": { y: "number", comment: "Cancels the \"Cancel Tween Stretch Y\" Event" },
+    "Cancel Tween X Stretch": { comment: "Cancels the \"Cancel Tween Stretch X\" Event" },
+    "Cancel Tween Y Stretch": { comment: "Cancels the \"Cancel Tween Stretch Y\" Event" },
 
     // ==EVENTS==
     "Broadcast Message": { name: "string", data: "string", hideTarget: true, comment: "Broadcasts the target message." },
@@ -537,7 +571,6 @@ const EVENT_DEFS = {
     "Set Variable": { name: "string", value: "string", hideTarget: false, comment: "Sets the provided variable to the provided value." },
     "Change Variable": { name: "string", increment: "number", hideTarget: false, comment: "Changes the provided variable by the provided increment." },
     
-    // Example from prompt
     "Example Event": { newX: "number", newY: "number", layer: "int", message: "string", override: "boolean", tweenMode: "tweenMode", effect: "effect", hideTarget: true, comment: "Lorem ipsum" }
 };
 
@@ -547,11 +580,12 @@ const state = {
     spb: parseInt(urlParams.get('spb')) || 4,
     bpl: parseInt(urlParams.get('bpl')) || 16,
     columns: 4,
-    quantizer: 4, // 1/4 default
+    quantizer: 4, 
+    durationUnit: 'time', // time, beats, steps
     
-    events: [], // Array of { time, column, type, params: {}, target, stacking, _uid }
-    selection: new Set(), // Set of _uids
-    clipboard: [], // Array of events for copy/paste
+    events: [], 
+    selection: new Set(), 
+    clipboard: [], 
     
     selectedEventType: "Set Position",
     
@@ -562,34 +596,41 @@ const state = {
     playbackTime: 0,
     audioSource: null,
     
-    // Viewport
     scrollY: 0,
-    zoom: 60, // pixels per beat
+    zoom: 60, 
     
-    // Interaction
     isDragging: false,
     isBoxSelecting: false,
     dragStart: { x: 0, y: 0 },
-    dragMode: null, // 'move', 'select', 'pan'
+    dragMode: null, 
     boxSelectRect: { x: 0, y: 0, w: 0, h: 0 },
     lastMouseY: 0,
     
-    // Sidebar interaction flags
     didPan: false,
     isSidebarAction: false,
     panStartY: 0,
-
-    // Logic for Shift-Click actions
     shiftPending: false,
 };
 
-// Add UID to events
 let uidCounter = 0;
 function getUid() { return ++uidCounter; }
 
 /**
- * HELPER: Initialize Params fully with defaults
+ * HELPER: Conversions
  */
+function toDisplayDuration(seconds) {
+    let val = seconds;
+    if (state.durationUnit === 'beats') val = seconds * (state.bpm / 60);
+    if (state.durationUnit === 'steps') val = seconds * (state.bpm / 60) * state.quantizer;
+    return parseFloat(val.toFixed(4));
+}
+
+function toSecondsDuration(displayVal) {
+    if (state.durationUnit === 'beats') return displayVal / (state.bpm / 60);
+    if (state.durationUnit === 'steps') return displayVal / ((state.bpm / 60) * state.quantizer);
+    return displayVal;
+}
+
 function initializeParams(type) {
     const def = EVENT_DEFS[type];
     if (!def) return {};
@@ -609,27 +650,62 @@ function initializeParams(type) {
  * UI INITIALIZATION
  */
 function initUI() {
-    // Set Title
-    document.getElementById('title-bar').innerText = `Cube Engine V4 Sequencer (${ce_version})`;
-
-    // Populate Event Select
-    const select = document.getElementById('event-type-select');
-    Object.keys(EVENT_DEFS).forEach(key => {
-        // HIDE EXAMPLE EVENT UNLESS DEBUG
-        if (key === "Example Event" && !isDebug) return;
-
-        const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = key;
-        select.appendChild(opt);
-    });
-    select.value = "Set Position";
+    document.getElementById('title-text').innerText = `Cube Engine V4 Sequencer (${ce_version})${isLegacy ? ' [LEGACY MODE]' : ''}`;
     
-    // Enhanced Selection Change Logic
+    const btnToggleLegacy = document.getElementById('btn-toggle-legacy');
+    if (isEmbed) {
+        btnToggleLegacy.style.display = 'none';
+    } else {
+        btnToggleLegacy.innerText = isLegacy ? 'Switch to Normal Mode' : 'Switch to Legacy Mode';
+        btnToggleLegacy.onclick = () => {
+            const url = new URL(window.location.href);
+            if (isLegacy) {
+                url.searchParams.delete('legacy');
+            } else {
+                url.searchParams.set('legacy', '1');
+            }
+            window.location.href = url.toString();
+        };
+    }
+    
+    if (isLegacy) {
+        document.querySelectorAll('.legacy-only').forEach(el => el.classList.remove('hidden'));
+        document.getElementById('btn-export').classList.add('hidden');
+        document.getElementById('btn-import').classList.add('hidden');
+        document.getElementById('grp-event-type').classList.add('hidden');
+        document.getElementById('grp-legacy-label').classList.remove('hidden');
+        document.getElementById('grp-legacy-value').classList.remove('hidden');
+        document.getElementById('grp-target').classList.add('hidden');
+        document.getElementById('grp-stacking').classList.add('hidden');
+        document.getElementById('dynamic-controls').classList.add('hidden');
+        
+        document.getElementById('btn-export-time').onclick = exportTimeList;
+        document.getElementById('btn-export-label').onclick = exportLabelList;
+        document.getElementById('btn-export-value').onclick = exportValueList;
+    }
+
+    const populateSelect = () => {
+        const select = document.getElementById('event-type-select');
+        select.innerHTML = ''; 
+        Object.keys(EVENT_DEFS).forEach(key => {
+            if (key === "Example Event" && !isDebug) return;
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = key;
+            select.appendChild(opt);
+        });
+        if(EVENT_DEFS[state.selectedEventType]) select.value = state.selectedEventType;
+        else {
+            select.value = "Set Position";
+            state.selectedEventType = "Set Position";
+        }
+    };
+    populateSelect();
+    
+    const select = document.getElementById('event-type-select');
     select.onchange = (e) => {
         const newType = e.target.value;
         state.selectedEventType = newType;
-        
         if (state.selection.size > 0) {
             state.selection.forEach(uid => {
                 const evt = state.events.find(ev => ev._uid === uid);
@@ -643,13 +719,11 @@ function initUI() {
         renderDynamicControls();
     };
 
-    // Embed Mode Classes
     if (isEmbed) {
         document.querySelectorAll('.embed-hidden').forEach(el => el.classList.add('hidden'));
         document.querySelectorAll('.embed-only').forEach(el => el.classList.remove('hidden'));
     }
 
-    // Settings Inputs
     const bindInput = (id, key, parser, cb) => {
         const el = document.getElementById(id);
         if(el) {
@@ -662,14 +736,13 @@ function initUI() {
         }
     };
 
-    // FIX: Added generateWaveformBitmap callback to BPM input
     bindInput('set-bpm', 'bpm', parseFloat, generateWaveformBitmap);
     bindInput('set-spb', 'spb', parseInt, generateWaveformBitmap);
     bindInput('set-bpl', 'bpl', parseInt, generateWaveformBitmap);
     bindInput('set-cols', 'columns', parseInt);
     bindInput('set-quant', 'quantizer', parseInt);
+    bindInput('set-dur-unit', 'durationUnit', String, renderDynamicControls);
 
-    // Audio Loading
     const audioInput = document.getElementById('audio-input');
     if (audioInput) {
         audioInput.onchange = async (e) => {
@@ -685,12 +758,10 @@ function initUI() {
         };
     }
     
-    // Base64 Audio param
     const b64Audio = urlParams.get('audio');
     if (b64Audio) {
         try {
-            const dataUrl = decodeURIComponent(b64Audio);  // Full data: URL
-
+            const dataUrl = decodeURIComponent(b64Audio); 
             fetch(dataUrl)
                 .then(res => res.arrayBuffer())
                 .then(buffer => {
@@ -701,12 +772,9 @@ function initUI() {
                     });
                 })
                 .catch(err => console.error("Decode failed", err));
-        } catch (e) {
-            console.error("Failed to decode data URL", e);
-        }
+        } catch (e) { console.error("Failed to decode data URL", e); }
     }
     
-    // Base64 EventList param
     const b64EventList = urlParams.get('eventList');
     if(b64EventList) {
         try {
@@ -716,24 +784,41 @@ function initUI() {
         } catch(e) { console.error("Failed to decode eventList param", e); }
     }
 
-    // Actions
     document.getElementById('btn-export').onclick = exportJSON;
     document.getElementById('btn-save').onclick = () => {
         const json = generateJSON();
         window.parent.postMessage({ type: 'save', data: json }, '*');
     };
     
-    // Clear All Logic with Custom Modal
-    const modal = document.getElementById('confirm-modal');
+    if (isExternal) {
+        const btnLoadCustom = document.getElementById('btn-load-custom');
+        const fileInputCustom = document.getElementById('file-custom-events');
+        btnLoadCustom.classList.remove('hidden');
+        btnLoadCustom.onclick = () => fileInputCustom.click();
+        
+        fileInputCustom.onchange = (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const customDefs = JSON.parse(ev.target.result);
+                    Object.assign(EVENT_DEFS, customDefs);
+                    populateSelect();
+                    renderDynamicControls();
+                    alert(`Loaded ${Object.keys(customDefs).length} custom events.`);
+                } catch(err) {
+                    alert("Failed to load custom events JSON");
+                    console.error(err);
+                }
+            };
+            reader.readAsText(file);
+        };
+    }
     
-    document.getElementById('btn-clear').onclick = () => {
-        modal.classList.remove('hidden');
-    };
-
-    modal.querySelector('#modal-cancel').onclick = () => {
-        modal.classList.add('hidden');
-    };
-
+    const modal = document.getElementById('confirm-modal');
+    document.getElementById('btn-clear').onclick = () => modal.classList.remove('hidden');
+    modal.querySelector('#modal-cancel').onclick = () => modal.classList.add('hidden');
     modal.querySelector('#modal-confirm').onclick = () => {
         state.events = [];
         state.selection.clear();
@@ -743,21 +828,13 @@ function initUI() {
     };
 
     const modal2 = document.getElementById('confirm-modal2');
-    
-    document.getElementById('btn-exit').onclick = () => {
-        modal2.classList.remove('hidden');
-    };
-
-    modal2.querySelector('#modal-cancel').onclick = () => {
-        modal2.classList.add('hidden');
-    };
-
+    document.getElementById('btn-exit').onclick = () => modal2.classList.remove('hidden');
+    modal2.querySelector('#modal-cancel').onclick = () => modal2.classList.add('hidden');
     modal2.querySelector('#modal-confirm').onclick = () => {
         window.parent.postMessage({ type: 'exit' }, '*');
         modal2.classList.add('hidden');
     };
     
-    // Delete Single/Selected Logic
     document.getElementById('btn-delete-event').onclick = () => {
         if(state.selection.size > 0) {
             state.events = state.events.filter(ev => !state.selection.has(ev._uid));
@@ -767,41 +844,41 @@ function initUI() {
         }
     };
     
-    // Transport
     document.getElementById('btn-play').onclick = togglePlay;
     document.getElementById('btn-stop').onclick = stopPlayback;
 
-    // Zoom Logic
     document.getElementById('btn-zoom-in').onclick = () => {
-        state.zoom = Math.min(state.zoom + 10, 200); // Max zoom cap
+        state.zoom = Math.min(state.zoom + 10, 200); 
         generateWaveformBitmap();
         draw();
     };
 
     document.getElementById('btn-zoom-out').onclick = () => {
-        state.zoom = Math.max(state.zoom - 10, 20); // Min zoom cap
+        state.zoom = Math.max(state.zoom - 10, 20); 
         generateWaveformBitmap();
         draw();
     };
     
     window.addEventListener('message', function(event) {
         const msg = event.data;
-
         if (msg.type === 'loadEvents') {
             importEvents(msg.data);
         } else if (msg.type === 'loadAudio') {
-            const arrayBuffer = msg.data.arrayBuffer();
-            state.audioContext.decodeAudioData(arrayBuffer, (buffer) => {
-                state.audioBuffer = buffer;
-                generateWaveformBitmap();
-                draw();
-            });
+            Promise.resolve().then(() => {
+                if (typeof msg.data === 'string') return fetch(msg.data).then(r => r.arrayBuffer());
+                else if (msg.data.arrayBuffer) return msg.data.arrayBuffer();
+                throw new Error("Unknown audio data format");
+            }).then(arrayBuffer => {
+                state.audioContext.decodeAudioData(arrayBuffer, (buffer) => {
+                    state.audioBuffer = buffer;
+                    generateWaveformBitmap();
+                    draw();
+                }, (err) => console.error("Audio decode error:", err));
+            }).catch(err => console.error("Audio load error:", err));
         }
     });
 
-    // Global Input
     window.addEventListener('keydown', handleKey);
-    
     renderDynamicControls();
 }
 
@@ -809,6 +886,18 @@ function initUI() {
  * EDIT PANEL LOGIC
  */
 function renderDynamicControls() {
+    if (isLegacy) {
+        if (state.selection.size === 1) {
+            const id = Array.from(state.selection)[0];
+            const evt = state.events.find(e => e._uid === id);
+            if (evt) {
+                document.getElementById('prop-legacy-label').value = evt.label || '';
+                document.getElementById('prop-legacy-value').value = evt.value || '';
+            }
+        }
+        return;
+    }
+
     const container = document.getElementById('dynamic-controls');
     container.innerHTML = '';
     
@@ -824,13 +913,12 @@ function renderDynamicControls() {
             values = evt.params;
             isEditingSingle = true;
             
-            const def = EVENT_DEFS[defName];
+            const def = EVENT_DEFS[defName] || {};
             const targetGrp = document.getElementById('grp-target');
             const targetInput = document.getElementById('prop-target');
             const stackingGrp = document.getElementById('grp-stacking');
             const stackingInput = document.getElementById('prop-stacking');
             
-            // Logic: Disable Stacking if Target is disabled
             if (def.hideTarget) {
                 targetInput.disabled = true;
                 targetInput.value = 0;
@@ -850,7 +938,7 @@ function renderDynamicControls() {
             }
         }
     } else {
-        const def = EVENT_DEFS[defName];
+        const def = EVENT_DEFS[defName] || {};
         values = initializeParams(defName);
         
         const targetGrp = document.getElementById('grp-target');
@@ -892,7 +980,7 @@ function renderDynamicControls() {
 
         const wrapper = document.createElement('div');
         wrapper.className = 'control-group';
-        wrapper.setAttribute('data-key', key); // Mark so we can read DOM later
+        wrapper.setAttribute('data-key', key); 
         wrapper.setAttribute('data-type', type);
         
         const label = document.createElement('label');
@@ -920,33 +1008,38 @@ function renderDynamicControls() {
             input = document.createElement('input');
             input.type = 'number';
             input.step = type === 'int' ? '1' : '0.01';
-            input.value = currentVal;
-            input.onchange = (e) => {
+            
+            let displayVal = currentVal;
+            if (key === 'duration') {
+                displayVal = toDisplayDuration(currentVal);
+                label.textContent = `Duration (${state.durationUnit})`;
+                input.step = 'any';
+            }
+            
+            input.value = displayVal;
+            input.addEventListener('input', (e) => {
                 let val = parseFloat(e.target.value);
-                if (type === 'int') {
-                    val = Math.round(val);
-                    e.target.value = val; // Force display update
-                }
+                if (key === 'duration') val = toSecondsDuration(val);
+                if (type === 'int' && key !== 'duration') val = Math.round(val);
                 updateValue(val);
-            };
+            });
         } else if (type === 'string') {
             input = document.createElement('input');
             input.type = 'text';
             input.value = currentVal;
-            input.onchange = (e) => updateValue(e.target.value);
+            input.addEventListener('input', (e) => updateValue(e.target.value));
         } else if (type === 'boolean') {
             input = document.createElement('div');
             input.className = 'checkbox-group';
             const cb = document.createElement('input');
             cb.type = 'checkbox';
             cb.checked = currentVal;
-            cb.onchange = (e) => updateValue(e.target.checked);
+            cb.addEventListener('change', (e) => updateValue(e.target.checked));
             const lb = document.createElement('label');
             lb.textContent = "Enabled";
             lb.onclick = () => cb.click();
             input.appendChild(cb);
             input.appendChild(lb);
-            // Helper for DOM reading
             wrapper.setAttribute('data-bool', 'true'); 
         } else if (type === 'effect') {
             input = document.createElement('select');
@@ -957,7 +1050,7 @@ function renderDynamicControls() {
                 input.appendChild(opt);
             });
             input.value = currentVal;
-            input.onchange = (e) => updateValue(e.target.value);
+            input.addEventListener('change', (e) => updateValue(e.target.value));
         } else if (type === 'tweenMode') {
             input = document.createElement('div');
             input.className = 'tween-row';
@@ -978,8 +1071,8 @@ function renderDynamicControls() {
             dirSel.value = d;
 
             const pushTween = () => updateValue(`${styleSel.value}-${dirSel.value}`);
-            styleSel.onchange = pushTween;
-            dirSel.onchange = pushTween;
+            styleSel.addEventListener('change', pushTween);
+            dirSel.addEventListener('change', pushTween);
 
             input.appendChild(styleSel);
             input.appendChild(dirSel);
@@ -990,24 +1083,41 @@ function renderDynamicControls() {
     }
 }
 
-// Global property listeners
-document.getElementById('prop-target').onchange = (e) => {
+document.getElementById('prop-target').addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
     state.selection.forEach(uid => {
         const evt = state.events.find(ev => ev._uid === uid);
         if(evt && !EVENT_DEFS[evt.type].hideTarget) evt.target = val;
     });
     draw();
-};
+});
 
-document.getElementById('prop-stacking').onchange = (e) => {
+document.getElementById('prop-stacking').addEventListener('change', (e) => {
     const val = e.target.checked;
     state.selection.forEach(uid => {
         const evt = state.events.find(ev => ev._uid === uid);
         if(evt) evt.stacking = val;
     });
     draw();
-};
+});
+
+document.getElementById('prop-legacy-label').addEventListener('input', (e) => {
+    if (!isLegacy) return;
+    state.selection.forEach(uid => {
+        const evt = state.events.find(ev => ev._uid === uid);
+        if(evt) evt.label = e.target.value;
+    });
+    draw();
+});
+
+document.getElementById('prop-legacy-value').addEventListener('input', (e) => {
+    if (!isLegacy) return;
+    state.selection.forEach(uid => {
+        const evt = state.events.find(ev => ev._uid === uid);
+        if(evt) evt.value = e.target.value;
+    });
+    draw();
+});
 
 function getDefault(type) {
     if (type === 'number' || type === 'int') return 0;
@@ -1018,11 +1128,8 @@ function getDefault(type) {
     return null;
 }
 
-/**
- * HELPER: Scrape current sidebar values to use for new events
- */
 function getCurrentToolParams(type) {
-    const params = initializeParams(type); // Start with defaults
+    const params = initializeParams(type); 
     const container = document.getElementById('dynamic-controls');
     
     const groups = container.querySelectorAll('.control-group');
@@ -1032,7 +1139,8 @@ function getCurrentToolParams(type) {
         if(!key) return;
 
         if (dataType === 'number' || dataType === 'int') {
-            const val = parseFloat(grp.querySelector('input').value);
+            let val = parseFloat(grp.querySelector('input').value);
+            if (key === 'duration') val = toSecondsDuration(val);
             params[key] = isNaN(val) ? 0 : val;
         } else if (dataType === 'string') {
             params[key] = grp.querySelector('input').value;
@@ -1050,7 +1158,6 @@ function getCurrentToolParams(type) {
     
     return params;
 }
-
 
 /**
  * CANVAS ENGINE
@@ -1127,12 +1234,9 @@ function generateWaveformBitmap() {
 }
 
 function draw() {
-    // 1. Clear Main Background
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--c-bg-main');
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 2. Draw Scrollbar Area Background (0 - 50px)
-    // Lighter background to look like a scrollbar track
     ctx.fillStyle = "#16102e"; 
     ctx.fillRect(0, 0, 50, canvas.height);
 
@@ -1147,9 +1251,7 @@ function draw() {
     const colWidth = (canvas.width - 50) / state.columns;
     const totalHeight = state.bpl * state.zoom;
     
-    // 3. Draw Waveforms
     if (waveformCanvas) {
-        // Draw Scrollbar Waveform (Clipped to left 50px)
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, 0, 50, canvas.height);
@@ -1157,7 +1259,6 @@ function draw() {
         ctx.drawImage(waveformCanvas, -25, -state.scrollY); 
         ctx.restore();
 
-        // Draw Main Background Waveform (Translucent)
         ctx.globalAlpha = 0.15;
         ctx.drawImage(waveformCanvas, 0, 0, waveformCanvas.width, waveformCanvas.height, 50, -state.scrollY, canvas.width - 50, totalHeight);
         ctx.globalAlpha = 1.0;
@@ -1169,7 +1270,6 @@ function draw() {
     const cGrid = getComputedStyle(document.body).getPropertyValue('--c-grid-line');
     const cBeat = getComputedStyle(document.body).getPropertyValue('--c-beat-line');
     
-    // 4. Draw Columns
     ctx.strokeStyle = cGrid;
     ctx.lineWidth = 1;
     
@@ -1181,7 +1281,6 @@ function draw() {
         ctx.stroke();
     }
 
-    // 5. Draw Beats
     const totalBeats = state.bpl;
     for (let i = 0; i <= totalBeats; i++) {
         const y = i * state.zoom;
@@ -1199,19 +1298,35 @@ function draw() {
         }
     }
 
-    // 6. Draw Events
     const stepHeight = Math.max(state.zoom / state.quantizer, 5);
-    const cEvt = getComputedStyle(document.body).getPropertyValue('--c-event-bg');
-    const cEvtSel = getComputedStyle(document.body).getPropertyValue('--c-event-selected');
+    const cEvt = getComputedStyle(document.body).getPropertyValue('--c-event-bg').trim();
+    const cEvtHover = getComputedStyle(document.body).getPropertyValue('--c-event-hover').trim();
+    const cEvtSel = getComputedStyle(document.body).getPropertyValue('--c-event-selected').trim();
 
     state.events.forEach(evt => {
         const y = (evt.time * (state.bpm / 60)) * state.zoom;
         const x = 50 + evt.column * colWidth;
         const h = stepHeight; 
         const w = colWidth;
-
         const isSelected = state.selection.has(evt._uid);
 
+        // --- Duration Indicator Tail ---
+        if (!isLegacy && evt.params && typeof evt.params.duration === 'number' && evt.params.duration > 0) {
+            const durPx = (evt.params.duration * (state.bpm / 60)) * state.zoom;
+            if (durPx > h) {
+                ctx.fillStyle = isSelected ? cEvtSel : cEvtHover;
+                ctx.globalAlpha = isSelected ? 0.8 : 0.4;
+                
+                // Draw trailing line
+                ctx.fillRect(x + w/2 - 4, y + h, 8, durPx - h);
+                // Draw end cap
+                ctx.fillRect(x + w/2 - 12, y + durPx - 2, 24, 2);
+                
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // --- Main Event Block ---
         ctx.fillStyle = isSelected ? cEvtSel : cEvt;
         if(isSelected) {
             ctx.shadowBlur = 10;
@@ -1226,33 +1341,30 @@ function draw() {
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 10px 'Segoe UI', sans-serif";
         
-        // Clip text area
         ctx.save();
         ctx.beginPath();
         ctx.rect(x + 1, y, w - 2, h - 1);
         ctx.clip();
         
-        // Draw Type
-        ctx.fillText(evt.type, x + 5, y + h/2 + 3);
+        ctx.fillText(isLegacy ? (evt.label || 'Event') : evt.type, x + 5, y + h/2 + 3);
 
-        // Draw Target ID (Right Aligned)
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.textAlign = "right";
-        const targetStr = evt.target.toString();
-        ctx.fillText(targetStr, x + w - 5, y + 10);
-        
-        // Stacking Indicator (Beside Target ID)
-        if(evt.stacking) {
-            const tw = ctx.measureText(targetStr).width;
-            ctx.fillStyle = "#ffeb3b";
-            ctx.fillRect(x + w - 5 - tw - 6, y + 4, 4, 4);
+        if (!isLegacy) {
+            ctx.fillStyle = "rgba(255,255,255,0.7)";
+            ctx.textAlign = "right";
+            const targetStr = evt.target.toString();
+            ctx.fillText(targetStr, x + w - 5, y + 10);
+            
+            if(evt.stacking) {
+                const tw = ctx.measureText(targetStr).width;
+                ctx.fillStyle = "#ffeb3b";
+                ctx.fillRect(x + w - 5 - tw - 6, y + 4, 4, 4);
+            }
         }
         
-        ctx.textAlign = "left"; // Reset
+        ctx.textAlign = "left"; 
         ctx.restore();
     });
 
-    // 7. Draw Selection Box
     if (state.isBoxSelecting) {
         ctx.fillStyle = "rgba(213, 0, 249, 0.2)";
         ctx.strokeStyle = "#d500f9";
@@ -1261,7 +1373,6 @@ function draw() {
         ctx.strokeRect(r.x, r.y + state.scrollY, r.w, r.h);
     }
 
-    // 8. Draw Playhead
     if (state.isPlaying || state.playbackTime > 0) {
         const playY = (state.playbackTime * (state.bpm / 60)) * state.zoom;
         ctx.strokeStyle = "#00e5ff";
@@ -1279,21 +1390,16 @@ function draw() {
 }
 
 /**
- * HELPER: Create Event Logic
+ * INTERACTION
  */
 function createEventAtMouse(mx, my, isSnapped) {
     const colWidth = (canvas.width - 50) / state.columns;
     const col = Math.floor((mx - 50) / colWidth);
-    
-    // Safety check for valid column
     if (col < 0 || col >= state.columns) return;
 
     const rawTime = getTime(my);
     const finalTime = isSnapped ? snapTime(rawTime) : Math.max(0, rawTime);
     
-    // Check overlap only if snapped to avoid mess, 
-    // but unsnapped usually implies stacking/freedom.
-    // For now, let's keep overlap check lax or standard.
     const stepHeight = Math.max(state.zoom / state.quantizer, 5);
     const finalY = (finalTime * (state.bpm / 60)) * state.zoom;
     
@@ -1303,58 +1409,63 @@ function createEventAtMouse(mx, my, isSnapped) {
     });
 
     if (!overlap) {
-        const type = state.selectedEventType;
-        const params = getCurrentToolParams(type);
-        const def = EVENT_DEFS[type];
-        
-        let curTarget = 0;
-        let curStacking = false;
-        const tgtInput = document.getElementById('prop-target');
-        if(tgtInput && !tgtInput.disabled) curTarget = parseInt(tgtInput.value) || 0;
-        const stkInput = document.getElementById('prop-stacking');
-        if(stkInput && !stkInput.disabled) curStacking = stkInput.checked;
+        let newEvt;
+        if (isLegacy) {
+            const lbl = document.getElementById('prop-legacy-label').value || 'Event';
+            const val = document.getElementById('prop-legacy-value').value || '';
+            newEvt = {
+                _uid: getUid(),
+                time: finalTime,
+                column: col,
+                label: lbl,
+                value: val
+            };
+        } else {
+            const type = state.selectedEventType;
+            const params = getCurrentToolParams(type);
+            const def = EVENT_DEFS[type] || {};
+            
+            let curTarget = 0;
+            let curStacking = false;
+            const tgtInput = document.getElementById('prop-target');
+            if(tgtInput && !tgtInput.disabled) curTarget = parseInt(tgtInput.value) || 0;
+            const stkInput = document.getElementById('prop-stacking');
+            if(stkInput && !stkInput.disabled) curStacking = stkInput.checked;
 
-        const newEvt = {
-            _uid: getUid(),
-            time: finalTime,
-            column: col,
-            type: type,
-            params: params, 
-            target: def.hideTarget ? 0 : curTarget,
-            stacking: curStacking
-        };
+            newEvt = {
+                _uid: getUid(),
+                time: finalTime,
+                column: col,
+                type: type,
+                params: params, 
+                target: def.hideTarget ? 0 : curTarget,
+                stacking: curStacking
+            };
+        }
         
         state.events.push(newEvt);
         state.selection.clear();
         state.selection.add(newEvt._uid);
         
-        // If we want immediate drag after creation (snapped only typically):
         if (isSnapped) {
             state.isDragging = true;
             state.dragMode = 'move';
-            // Need to set dragStart relative to the snapped pos so it doesn't jump
-            state.dragStart = { x: mx, y: finalY - state.scrollY }; // approx
+            state.dragStart = { x: mx, y: my + state.scrollY }; 
         }
     }
 }
 
-/**
- * INTERACTION
- */
 container.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     const worldY = my + state.scrollY;
     
-    // 1. Time Panning (Waveform Gutter)
     if (mx < 50) {
-        if (e.button === 0 || e.button === 1) { // Left or Middle
+        if (e.button === 0 || e.button === 1) { 
             state.isDragging = true;
             state.dragMode = 'pan';
             state.lastMouseY = my;
-            
-            // New logic: Track if this turns into a pan or stays a click
             state.didPan = false;
             state.panStartY = my;
             state.isSidebarAction = (mx < 50);
@@ -1362,13 +1473,12 @@ container.addEventListener('mousedown', (e) => {
         }
     }
     
-    // Middle Mouse Pan (Anywhere)
     if (e.button === 1) {
         state.isDragging = true;
         state.dragMode = 'pan';
         state.lastMouseY = my;
         state.didPan = false; 
-        state.isSidebarAction = false; // Middle click elsewhere isn't sidebar logic
+        state.isSidebarAction = false; 
         return;
     }
 
@@ -1376,20 +1486,17 @@ container.addEventListener('mousedown', (e) => {
     const col = Math.floor((mx - 50) / colWidth);
     const stepHeight = Math.max(state.zoom / state.quantizer, 5);
 
-    // Hit Test
     const hit = state.events.find(evt => {
         const ey = (evt.time * (state.bpm / 60)) * state.zoom;
         return col === evt.column && worldY >= ey && worldY <= ey + stepHeight;
     });
 
     if (hit) {
-        if (e.button === 0) { // Left Click on Event
+        if (e.button === 0) { 
             if (e.ctrlKey || e.metaKey) {
-                // CTRL CLICK: Toggle Selection
                 if (state.selection.has(hit._uid)) state.selection.delete(hit._uid);
                 else state.selection.add(hit._uid);
             } else {
-                // NORMAL CLICK: Select Single
                 if (!state.selection.has(hit._uid)) {
                     state.selection.clear();
                     state.selection.add(hit._uid);
@@ -1404,22 +1511,18 @@ container.addEventListener('mousedown', (e) => {
             state.dragStart = { x: mx, y: worldY };
         }
     } else {
-        if (e.button === 0) { // Left Click on Empty
+        if (e.button === 0) { 
             if (!state.audioBuffer) return;
 
             if (e.shiftKey) {
-                // SHIFT CLICK LOGIC:
-                // Start Shift Pending (wait to see if dragging for box select or clicking for unsnapped)
                 state.shiftPending = true;
-                state.dragStart = { x: mx, y: my }; // Screen coords for distance check
-                state.dragStartWorld = { x: mx, y: worldY }; // World coords for box/place
+                state.dragStart = { x: mx, y: my }; 
+                state.dragStartWorld = { x: mx, y: worldY }; 
                 return;
             }
 
-            // Normal Click -> Snapped Create
-            createEventAtMouse(mx, my, true); // true = snapped
+            createEventAtMouse(mx, my, true); 
         } else if (e.button === 2) {
-            // Right Click -> Box Select
             state.isBoxSelecting = true;
             state.dragStart = { x: mx, y: my };
             state.boxSelectRect = { x: mx, y: my, w: 0, h: 0 };
@@ -1435,15 +1538,12 @@ window.addEventListener('mousemove', (e) => {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    // Shift Pending Logic (Decide between click-place and drag-select)
     if (state.shiftPending) {
         const dist = Math.hypot(mx - state.dragStart.x, my - state.dragStart.y);
         if (dist > 5) {
-            // Moved enough -> Start Box Select
             state.shiftPending = false;
             state.isBoxSelecting = true;
             state.boxSelectRect = { x: state.dragStart.x, y: state.dragStart.y, w: 0, h: 0 };
-            // Clear selection usually when starting new box
             state.selection.clear(); 
         }
     }
@@ -1452,14 +1552,13 @@ window.addEventListener('mousemove', (e) => {
 
     if (state.dragMode === 'pan') {
         const deltaY = my - state.lastMouseY;
+        if (Math.abs(my - state.panStartY) > 3) state.didPan = true;
         
-        // Threshold check for "Click vs Drag" on sidebar
-        if (Math.abs(my - state.panStartY) > 3) {
-            state.didPan = true;
-        }
-
         state.scrollY -= deltaY;
-        if (state.scrollY < 0) state.scrollY = 0;
+        const totalHeight = state.bpl * state.zoom;
+        const maxScroll = Math.max(0, totalHeight - container.clientHeight);
+        state.scrollY = Math.max(0, Math.min(state.scrollY, maxScroll));
+        
         state.lastMouseY = my;
         draw();
         return;
@@ -1479,11 +1578,9 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', (e) => {
-    // Finish Shift Pending (It was a click!)
     if (state.shiftPending) {
         state.shiftPending = false;
-        // Unsnapped Creation
-        createEventAtMouse(state.dragStart.x, state.dragStart.y, false); // false = unsnapped
+        createEventAtMouse(state.dragStart.x, state.dragStart.y, false); 
         renderDynamicControls();
         draw();
         return;
@@ -1493,17 +1590,12 @@ window.addEventListener('mouseup', (e) => {
         state.isDragging = false;
         state.dragMode = null;
 
-        // SIDEBAR CLICK LOGIC (If we didn't pan significantly)
         if (state.isSidebarAction && !state.didPan && e.button === 0) {
-            let t = getTime(state.panStartY); // Use start Y to match click pos exactly
-            
-            // Shift = Precise (Unsnapped), Default = Snapped
+            let t = getTime(state.panStartY); 
             if (!e.shiftKey) t = snapTime(t);
             if (t < 0) t = 0;
             
             state.playbackTime = t;
-            
-            // Adjust start time if playing
             if (state.isPlaying) {
                  state.startTime = state.audioContext.currentTime - state.playbackTime;
                  if (state.audioSource) {
@@ -1527,7 +1619,6 @@ window.addEventListener('mouseup', (e) => {
     if (state.isDragging && state.dragMode === 'move') {
         const dy = worldY - state.dragStart.y;
         const dx = mx - state.dragStart.x;
-        
         const colWidth = (canvas.width - 50) / state.columns;
         const colDelta = Math.round(dx / colWidth);
         const timeDelta = getTime(dy) - getTime(0); 
@@ -1535,9 +1626,6 @@ window.addEventListener('mouseup', (e) => {
         if (Math.abs(dy) > 5 || Math.abs(dx) > colWidth/2) {
              const bps = state.bpm/60;
              const stepTime = 1 / bps / state.quantizer;
-             
-             // UN-SNAPPED LOGIC FOR DRAG
-             // If Shift is held, use raw timeDelta. Else snap it.
              const finalTimeDelta = e.shiftKey ? timeDelta : (Math.round(timeDelta / stepTime) * stepTime);
              
              const moves = [];
@@ -1551,11 +1639,9 @@ window.addEventListener('mouseup', (e) => {
                  const collision = state.events.find(other => {
                      if (state.selection.has(other._uid)) return false;
                      const stepHeight = Math.max(state.zoom / state.quantizer, 5);
-                     
                      if (other.column !== newCol) return false;
                      const otherY = (other.time * (state.bpm/60)) * state.zoom;
                      const newY = (newTime * (state.bpm/60)) * state.zoom;
-                     
                      return Math.abs(otherY - newY) < stepHeight; 
                  });
                  
@@ -1587,7 +1673,6 @@ window.addEventListener('mouseup', (e) => {
         const worldTop = ry + state.scrollY;
         const worldBottom = worldTop + rh;
         
-        // Don't clear if Ctrl held?
         if (!e.ctrlKey) state.selection.clear();
         
         state.events.forEach(evt => {
@@ -1611,64 +1696,56 @@ window.addEventListener('mouseup', (e) => {
     }
 });
 
-// Scroll Handling
 container.addEventListener('wheel', (e) => {
+    e.preventDefault(); 
+    const totalHeight = state.bpl * state.zoom;
+    const maxScroll = Math.max(0, totalHeight - container.clientHeight);
     state.scrollY += e.deltaY;
-    if (state.scrollY < 0) state.scrollY = 0;
-    const maxH = state.bpl * state.zoom - container.clientHeight;
-    if (state.scrollY > maxH) state.scrollY = maxH;
+    state.scrollY = Math.max(0, Math.min(state.scrollY, maxScroll));
     draw();
 });
 
-// Context Menu
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-/**
- * KEYBOARD SHORTCUTS
- */
 function handleKey(e) {
-    // 1. Copy / Paste / Cut
+    // Determine if user is typing in an input field
+    const isInputFocus = document.activeElement && 
+                         ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+
     if (e.ctrlKey || e.metaKey) {
+        // ALLOW default Copy/Paste if inside an input box!
+        if (isInputFocus && ['c', 'C', 'v', 'V', 'x', 'X'].includes(e.key)) {
+            return; 
+        }
+
         if (e.key === 'c' || e.key === 'C') {
-            // COPY
             if (state.selection.size === 0) return;
             state.clipboard = [];
-            
-            // Find earliest time in selection to normalize
             let minTime = Infinity;
             state.selection.forEach(uid => {
                 const ev = state.events.find(e => e._uid === uid);
                 if (ev && ev.time < minTime) minTime = ev.time;
             });
-            
             state.selection.forEach(uid => {
                 const ev = state.events.find(e => e._uid === uid);
                 if (ev) {
-                    // Deep copy
                     const clone = JSON.parse(JSON.stringify(ev));
-                    // Store relative time
                     clone.relativeTime = ev.time - minTime; 
                     state.clipboard.push(clone);
                 }
             });
-            console.log(`Copied ${state.clipboard.length} events`);
             return;
         }
         
         if (e.key === 'v' || e.key === 'V') {
-            // PASTE
             if (state.clipboard.length === 0) return;
-            
             state.selection.clear();
             const pasteTime = state.playbackTime;
-            
             state.clipboard.forEach(clipItem => {
                 const newEv = JSON.parse(JSON.stringify(clipItem));
                 newEv._uid = getUid();
                 newEv.time = pasteTime + clipItem.relativeTime;
-                // keep column, params, etc
                 delete newEv.relativeTime;
-                
                 state.events.push(newEv);
                 state.selection.add(newEv._uid);
             });
@@ -1677,9 +1754,7 @@ function handleKey(e) {
         }
 
         if (e.key === 'x' || e.key === 'X') {
-            // CUT (Copy + Delete)
             if (state.selection.size === 0) return;
-            // -- Copy Logic --
             state.clipboard = [];
             let minTime = Infinity;
             state.selection.forEach(uid => {
@@ -1694,7 +1769,6 @@ function handleKey(e) {
                     state.clipboard.push(clone);
                 }
             });
-            // -- Delete Logic --
             state.events = state.events.filter(ev => !state.selection.has(ev._uid));
             state.selection.clear();
             renderDynamicControls();
@@ -1703,13 +1777,13 @@ function handleKey(e) {
         }
     }
 
-    if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+    if (e.code === 'Space' && !isInputFocus) {
         e.preventDefault();
         togglePlay();
     }
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
-        if(document.activeElement.tagName !== 'INPUT') {
+        if(!isInputFocus) {
             state.events = state.events.filter(ev => !state.selection.has(ev._uid));
             state.selection.clear();
             renderDynamicControls();
@@ -1740,14 +1814,12 @@ function togglePlay() {
     } else {
         state.isPlaying = true;
         state.startTime = state.audioContext.currentTime - state.playbackTime;
-        
         if (state.audioBuffer) {
             state.audioSource = state.audioContext.createBufferSource();
             state.audioSource.buffer = state.audioBuffer;
             state.audioSource.connect(state.audioContext.destination);
             state.audioSource.start(0, state.playbackTime);
         }
-        
         animate();
     }
 }
@@ -1768,22 +1840,24 @@ function updateHUD() {
 
     if (activeEvt) {
         hud.classList.add('active');
-        clearTimeout(hudTimeout); // Keep alive
+        clearTimeout(hudTimeout); 
         
-        hudName.textContent = activeEvt.type;
-        hudTime.textContent = `Time: ${activeEvt.time.toFixed(3)}s | Target: ${activeEvt.target}`;
-        
-        const paramStr = Object.entries(activeEvt.params)
-            .map(([k,v]) => `${k}: ${v}`)
-            .join('<br>');
-        hudParams.innerHTML = paramStr;
+        if (isLegacy) {
+            hudName.textContent = activeEvt.label || 'Event';
+            hudTime.textContent = `Time: ${activeEvt.time.toFixed(3)}s`;
+            hudParams.innerHTML = `Value: ${activeEvt.value || 'None'}`;
+        } else {
+            hudName.textContent = activeEvt.type;
+            hudTime.textContent = `Time: ${activeEvt.time.toFixed(3)}s | Target: ${activeEvt.target}`;
+            const paramStr = Object.entries(activeEvt.params).map(([k,v]) => `${k}: ${v}`).join('<br>');
+            hudParams.innerHTML = paramStr;
+        }
     } else {
-        // Debounced hide
         if (hud.classList.contains('active') && !hudTimeout) {
             hudTimeout = setTimeout(() => {
                 hud.classList.remove('active');
                 hudTimeout = null;
-            }, 2000); // 2 second lingering
+            }, 2000); 
         }
     }
 }
@@ -1795,8 +1869,12 @@ function animate() {
     state.playbackTime = now - state.startTime;
     
     const y = (state.playbackTime * (state.bpm / 60)) * state.zoom;
+    
     if (y > state.scrollY + canvas.height - 100) {
-        state.scrollY = y - 100;
+        const totalHeight = state.bpl * state.zoom;
+        const maxScroll = Math.max(0, totalHeight - container.clientHeight);
+        let targetScroll = y - 100;
+        state.scrollY = Math.max(0, Math.min(targetScroll, maxScroll));
     }
 
     updateHUD();
@@ -1825,11 +1903,20 @@ function generateJSON() {
     });
 
     const exportData = sorted.map(e => {
+        if (isLegacy) {
+            return {
+                time: parseFloat(e.time.toFixed(5)),
+                column: e.column,
+                label: e.label,
+                value: e.value
+            };
+        }
+
         const fullParams = initializeParams(e.type);
         Object.assign(fullParams, e.params);
 
         const obj = {
-            time: parseFloat(e.time.toFixed(3)),
+            time: parseFloat(e.time.toFixed(5)),
             column: e.column,
             type: e.type, 
             ...fullParams,
@@ -1851,13 +1938,27 @@ function exportJSON() {
     downloadAnchorNode.remove();
 }
 
-/**
- * IMPORT EVENTS
- * Accepts either a JSON string or an array of event objects (like generateJSON output).
- * It will sanitize, assign internal _uid values, apply defaults for missing params
- * and sort by time then column. It avoids stacking collisions by skipping events
- * that would overlap an already-imported event in the same column/row.
- */
+function exportTextFile(filename, content) {
+    const dataStr = "data:text/plain;charset=utf-8," + encodeURIComponent(content);
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", filename);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+}
+
+function getSortedEvents() {
+    return [...state.events].sort((a, b) => {
+        if (Math.abs(a.time - b.time) > 0.0001) return a.time - b.time;
+        return a.column - b.column;
+    });
+}
+
+function exportTimeList() { exportTextFile('TimeList.txt', getSortedEvents().map(e => e.time.toFixed(5)).join('\n')); }
+function exportLabelList() { exportTextFile('LabelList.txt', getSortedEvents().map(e => e.label || '').join('\n')); }
+function exportValueList() { exportTextFile('ValueList.txt', getSortedEvents().map(e => e.value || '').join('\n')); }
+
 function importEvents(input) {
     let arr;
     try {
@@ -1872,15 +1973,13 @@ function importEvents(input) {
         return false;
     }
 
-    // Helper to check stacking collision for a given time & column using current newEvents
     const stepHeight = Math.max(state.zoom / state.quantizer, 5);
     const collisionCheck = (newEvents, time, column) => {
-        // compute y coordinate
         const y = (time * (state.bpm / 60)) * state.zoom;
         for (const ev of newEvents) {
             if (ev.column !== column) continue;
             const ey = (ev.time * (state.bpm / 60)) * state.zoom;
-            if (Math.abs(ey - y) < stepHeight) return true;
+            if (Math.abs(ey - y) < stepHeight / 8) return true;
         }
         return false;
     };
@@ -1893,7 +1992,6 @@ function importEvents(input) {
         const type = item.type || item.name || Object.keys(EVENT_DEFS)[0];
 
         const def = EVENT_DEFS[type] || {};
-        // Build params from def keys (generateJSON exported them top-level)
         const params = initializeParams(type);
         for (const k of Object.keys(def)) {
             if (k.startsWith('_') || k === 'hideTarget' || k === 'comment') continue;
@@ -1903,17 +2001,18 @@ function importEvents(input) {
         const target = def.hideTarget ? 0 : (item.target !== undefined ? parseInt(item.target) || 0 : 0);
         const stacking = !!item.stacking;
 
-        // Avoid stacking collisions with already-accepted new events
-        if (collisionCheck(newEvents, time, column)) {
-            // skip this event to avoid stacking
-            console.warn('importEvents: skipped overlapping event at', time, 'col', column, 'type', type);
+        if (!isLegacy && collisionCheck(newEvents, time, column)) {
+            console.warn('importEvents: skipped overlapping event at', time, 'col', column);
             continue;
         }
 
-        newEvents.push({ _uid: getUid(), time, column, type, params, target, stacking });
+        if (isLegacy) {
+            newEvents.push({ _uid: getUid(), time, column, label: item.label || 'Event', value: item.value || '' });
+        } else {
+            newEvents.push({ _uid: getUid(), time, column, type, params, target, stacking });
+        }
     }
 
-    // Sort by time then column
     newEvents.sort((a, b) => {
         if (Math.abs(a.time - b.time) > 0.0001) return a.time - b.time;
         return a.column - b.column;
@@ -1930,7 +2029,6 @@ function initMisc() {
     window.parent.postMessage({ type: 'requestSound' }, '*');
 }
 
-// Start
 initUI();
 resize();
 initMisc();
